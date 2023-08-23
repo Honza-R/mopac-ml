@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+
+import signal
+import sys
+import os
+import threading
+
+import torch
+from torchmdnet.models.model import load_model
+
+# Create the pipes
+os.system("mkfifo fifo_in.tmp  fifo_out.tmp")
+
+# Remove the pipes on exit using a
+# keyboard interrupt handler
+def sigint_handler(signal, frame):
+    print()
+    print('Interrupted, cleaning the files')
+    os.system("rm fifo_in.tmp  fifo_out.tmp")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, sigint_handler)
+
+
+def wait_for_input(pipe_in = "fifo_out.tmp"): 
+    """
+    Wait for input from pipe, return coordinates (list of lists)
+    """
+    f_in = open(pipe_in, "r")
+    size = None
+    coords = None
+    grad = False
+    while True:
+        line = f_in.readline().strip()
+        if line:
+            #print(">" + line) # Debug printing
+            if not size:
+                size = int(line)
+                coords = []
+                elements = []
+            elif line == "E":
+                break
+            elif line == "G":
+                grad = True
+                break
+            else: 
+                coords.append(line)
+
+    # Check size of coords
+    if size != len(coords):
+        raise Exception("No. of coordinates does not match the header")
+
+    # Split lines and convert to numbers
+    for i, line in enumerate(coords): 
+        words = line.split()
+        first = words.pop(0)
+        elements.append(int(first))
+        coords[i] = list(map(lambda x: float(x), words))
+
+    f_in.close()
+    return (elements, coords, grad)
+
+def write_output(energy, gradient = None, pipe_out = "fifo_in.tmp"):
+    f_out = open(pipe_out, "w")
+    print(energy, file=f_out)
+    if gradient:
+        for g in gradient:
+            print(g[0], " ", g[1], " ", g[2], file=f_out)
+    f_out.close()
+
+def data(elements,coords):
+    el_to_z={35:1, 6:3,  17:7, 9:9, 1:10, 53:12, 7:17, 8:21, 15:23, 16:26}
+    for num,data in enumerate(elements):
+        if (data not in el_to_z): #unknown atom skipping
+            elements.pop(num)
+            coords.pop(num)
+
+def calculation():
+    while True:
+        elements, coords, do_grad = wait_for_input()
+        #print("Received elements:")
+        #print(elements)
+        #print("Received coordinates:")
+        #print(coords)
+        data(elements,coords)
+        #print()
+    
+        # Energy calculation
+        ene, forces = energy_forces(elements, coords, model)
+        #print(f"Returning energy: {ene}")
+    
+        # ... and gradient
+        if do_grad:
+            grad=[]
+            #print(f"Returning gradient:")
+            for f in forces:
+                # Multiply with -1 to get gradient from forces
+                x = f[0].item() / 4.184 * -1.0
+                y = f[1].item() / 4.184 * -1.0
+                z = f[2].item() / 4.184 * -1.0
+                grad.append([x,y,z])
+            #print(grad)
+        else:
+            grad = None
+        
+        write_output(ene, grad)
+        #print()
+
+def energy_forces(elem, geom, model):
+    if(elem == []): #empty geom - noble gases
+        return (torch.tensor(0, dtype=torch.float32),torch.tensor([], dtype=torch.float32))
+    types = torch.tensor(elem, dtype=torch.long)
+    pos = torch.tensor(geom, dtype=torch.float32)
+    energy, forces = model.forward(types, pos)#,batch)
+    return (energy.item(), forces)
+
+
+# Paths and files
+install_path = os.path.dirname(os.path.abspath(__file__))
+model_file = os.path.join(install_path, "best.ckpt")
+mopac_exe  = os.path.join(install_path, "mopac")
+
+
+print("================================================================================")
+print("")
+print("MOPAC-ML wrapper")
+print("")
+print("================================================================================")
+print("")
+
+#!# Input should be checked, it must be a PM6 calculation
+#!# MOPAC keyword MLMODEL=/path/to/model.ckpt
+#   original input copied to temporaty file without this keyword
+
+print("Loading the model")
+model=load_model(model_file, derivative=True)
+thread = threading.Thread(target=calculation, daemon=True)
+thread.start()
+print("Running MOPAC")
+os.system(f"{mopac_exe} {sys.argv[1]}")
+print("Cleaning up")
+os.system("rm -rf fifo_in.tmp  fifo_out.tmp")

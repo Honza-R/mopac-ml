@@ -1,0 +1,8 @@
+job: dataset
+dataset: s66
+dataset_select_name: "^01"
+
+interface: mopac
+method: pm6
+mopac_exe: /home/rezac/Calculations/PM6-ML/MOPAC-ML/mopac-ml
+
