@@ -8,6 +8,10 @@ import threading
 import torch
 from torchmdnet.models.model import load_model
 
+dev="cpu"
+device = torch.device(dev)  
+
+
 # TBD
 #!# Input should be checked, it must be a PM6 calculation
 #!# MOPAC keyword MLMODEL=/path/to/model.ckpt
@@ -69,11 +73,13 @@ def wait_for_input(pipe_in = "fifo_out.tmp"):
 
 def write_output(energy, gradient = None, pipe_out = "fifo_in.tmp"):
     f_out = open(pipe_out, "w")
-    print(energy, file=f_out)
+    e = energy / 4.184
+    print(e, file=f_out)
     if gradient:
         for g in gradient:
             print(g[0], " ", g[1], " ", g[2], file=f_out)
     f_out.close()
+
 
 def data(elements,coords):
     el_to_z={35:1, 6:3,  17:7, 9:9, 1:10, 53:12, 7:17, 8:21, 15:23, 16:26}
@@ -81,6 +87,7 @@ def data(elements,coords):
         if (data not in el_to_z): #unknown atom skipping
             elements.pop(num)
             coords.pop(num)
+        elements[num] = el_to_z[data]
 
 def calculation():
     while True:
@@ -117,14 +124,19 @@ def energy_forces(elem, geom, model):
     if(elem == []): #empty geom - noble gases
         return (torch.tensor(0, dtype=torch.float32),torch.tensor([], dtype=torch.float32))
     types = torch.tensor(elem, dtype=torch.long)
+    types = types.to(device)
+    print(types)
     pos = torch.tensor(geom, dtype=torch.float32)
+    pos = pos.to(device)
     energy, forces = model.forward(types, pos)#,batch)
+    print(energy)
     return (energy.item(), forces)
 
 
 # Paths and files
 install_path = os.path.dirname(os.path.abspath(__file__))
 model_file = os.path.join(install_path, "best.ckpt")
+#model_file = os.path.join(install_path, "NCIA_4s10_ep098.ckpt")
 mopac_exe  = os.path.join(install_path, "mopac")
 
 
@@ -135,8 +147,9 @@ print("")
 print("================================================================================")
 print("")
 
-print("Loading the model")
+print(f"Loading the model {model_file}")
 model=load_model(model_file, derivative=True)
+model.to(device)
 thread = threading.Thread(target=calculation, daemon=True)
 thread.start()
 print("Running MOPAC")
