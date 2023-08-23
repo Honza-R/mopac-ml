@@ -1,0 +1,21 @@
+job: energy
+geometry: S66:01
+
+interface: mopac
+method: pm6
+
+modifiers: torchmdnet, dftd3
+modifier_torchmdnet:
+  torchmd_model: /home/rezac/Calculations/PM6-ML/MOPAC-ML/best.ckpt
+  torchmd_multiplier: 1.0
+
+modifier_dftd3:
+  d3_hh_fix: no
+  d3_damping: bj
+  d3_s6: 1.0
+  d3_s8: 0.3908
+  d3_a1: 0.566
+  d3_a2: 3.128
+  d3_3body: yes
+
+print: energy_decomposition

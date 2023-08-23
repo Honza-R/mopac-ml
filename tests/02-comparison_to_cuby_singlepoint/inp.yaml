@@ -1,0 +1,20 @@
+job: energy
+geometry: S66:01
+
+interface: mopac
+method: pm6
+mopac_exe: /home/rezac/Calculations/PM6-ML/MOPAC-ML/mopac-ml
+
+modifiers: dftd3
+modifier_dftd3:
+  d3_hh_fix: no
+  d3_damping: bj
+  d3_s6: 1.0
+  d3_s8: 0.3908
+  d3_a1: 0.566
+  d3_a2: 3.128
+  d3_3body: yes
+
+print: energy_decomposition
+job_cleanup: no
+existing_calc_dir: recreate

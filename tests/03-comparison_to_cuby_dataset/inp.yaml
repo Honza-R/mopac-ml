@@ -1,15 +1,12 @@
 job: dataset
 dataset: s66
-dataset_select_name: "^01"
+#dataset_select_name: "^01"
 
 interface: mopac
 method: pm6
+mopac_exe: /home/rezac/Calculations/PM6-ML/MOPAC-ML/mopac-ml
 
-modifiers: torchmdnet, dftd3
-modifier_torchmdnet:
-  torchmd_model: /home/rezac/Calculations/PM6-ML/MOPAC-ML/best.ckpt
-  torchmd_multiplier: 1.0
-
+modifiers: dftd3
 modifier_dftd3:
   d3_hh_fix: no
   d3_damping: bj
@@ -18,4 +15,5 @@ modifier_dftd3:
   d3_a1: 0.566
   d3_a2: 3.128
   d3_3body: yes
+
 
