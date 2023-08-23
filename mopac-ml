@@ -8,6 +8,13 @@ import threading
 import torch
 from torchmdnet.models.model import load_model
 
+# TBD
+#!# Input should be checked, it must be a PM6 calculation
+#!# MOPAC keyword MLMODEL=/path/to/model.ckpt
+#   original input copied to temporaty file without this keyword
+#!# Dispersion is now missing
+
+
 # Create the pipes
 os.system("mkfifo fifo_in.tmp  fifo_out.tmp")
 
@@ -127,10 +134,6 @@ print("MOPAC-ML wrapper")
 print("")
 print("================================================================================")
 print("")
-
-#!# Input should be checked, it must be a PM6 calculation
-#!# MOPAC keyword MLMODEL=/path/to/model.ckpt
-#   original input copied to temporaty file without this keyword
 
 print("Loading the model")
 model=load_model(model_file, derivative=True)
