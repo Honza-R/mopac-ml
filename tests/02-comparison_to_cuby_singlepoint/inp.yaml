@@ -4,6 +4,7 @@ geometry: S66:01
 interface: mopac
 method: pm6
 mopac_exe: /home/rezac/Calculations/PM6-ML/MOPAC-ML/mopac-ml
+mopac_keywords: MLCORR
 
 modifiers: dftd3
 modifier_dftd3:

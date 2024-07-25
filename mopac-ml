@@ -85,7 +85,7 @@ def check_input_file(fn):
                     mopac_ml_terminate(
                         "The ML correction is available only for PM6,\nbut a different method is specified in the input file"
                     )
-                if not re.search("MLCORR ", line):
+                if not re.search("MLCORR", line):
                     mopac_ml_terminate(
                         "The ML correction is not activated in the input file,\nplease add keyword MLCORR"
                     )
