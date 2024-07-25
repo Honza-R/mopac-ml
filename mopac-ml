@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 
-from dftd3.interface import RationalDampingParam, DispersionModel
-import numpy as np
-
 import signal
 import sys
 import os
 import threading
+import numpy as np
 
+# Torch and TorchMD-NET
 import torch
 from torchmdnet.models.model import load_model
 
-HA2KJMOL = 627.5094740631 *4.184
-B2A = 0.529177210903 
-dev="cpu"
-device = torch.device(dev)  
-
+# Dispersion correction
+from dftd3.interface import RationalDampingParam, DispersionModel
 
 # TBD
 #!# Input should be checked, it must be a PM6 calculation
@@ -23,22 +19,62 @@ device = torch.device(dev)
 #   original input copied to temporaty file without this keyword
 #!# Dispersion is now missing
 
+# -------------------------------------------------------------------------------
+# Paths and files
+# -------------------------------------------------------------------------------
+
+install_path = os.path.dirname(os.path.abspath(__file__))
+model_file = os.path.join(install_path, "models", "PM6-ML_correction_final_seed8.ckpt")
+mopac_exe = os.path.join(install_path, "mopac")
+
+# -------------------------------------------------------------------------------
+# Constants - unit conversion
+# -------------------------------------------------------------------------------
+
+HA2KJMOL = 627.5094740631 * 4.184
+B2A = 0.529177210903
+
+# -------------------------------------------------------------------------------
+# Initialization
+# -------------------------------------------------------------------------------
+
+# Check if we're on Linux
+if not sys.platform == "linux":
+    print("", file=sys.stderr)
+    print("ERROR: MOPAC-ML can currently be used only on Linux", file=sys.stderr)
+    print("", file=sys.stderr)
+    sys.exit(1)
+
 
 # Create the pipes
 os.system("mkfifo fifo_in.tmp  fifo_out.tmp")
+
+# Torch init
+dev = "cpu"
+device = torch.device(dev)
+
+# -------------------------------------------------------------------------------
+# Interrupt handling
+# -------------------------------------------------------------------------------
+
 
 # Remove the pipes on exit using a
 # keyboard interrupt handler
 def sigint_handler(signal, frame):
     print()
-    print('Interrupted, cleaning the files')
+    print("Interrupted, cleaning the files")
     os.system("rm fifo_in.tmp  fifo_out.tmp")
     sys.exit(0)
 
+
 signal.signal(signal.SIGINT, sigint_handler)
 
+# -------------------------------------------------------------------------------
+# Methods
+# -------------------------------------------------------------------------------
 
-def wait_for_input(pipe_in = "fifo_out.tmp"): 
+
+def wait_for_input(pipe_in="fifo_out.tmp"):
     """
     Wait for input from pipe, return coordinates (list of lists)
     """
@@ -49,7 +85,7 @@ def wait_for_input(pipe_in = "fifo_out.tmp"):
     while True:
         line = f_in.readline().strip()
         if line:
-            #print(">" + line) # Debug printing
+            # print(">" + line) # Debug printing
             if not size:
                 size = int(line)
                 coords = []
@@ -59,7 +95,7 @@ def wait_for_input(pipe_in = "fifo_out.tmp"):
             elif line == "G":
                 grad = True
                 break
-            else: 
+            else:
                 coords.append(line)
 
     # Check size of coords
@@ -67,7 +103,7 @@ def wait_for_input(pipe_in = "fifo_out.tmp"):
         raise Exception("No. of coordinates does not match the header")
 
     # Split lines and convert to numbers
-    for i, line in enumerate(coords): 
+    for i, line in enumerate(coords):
         words = line.split()
         first = words.pop(0)
         elements.append(int(first))
@@ -76,7 +112,8 @@ def wait_for_input(pipe_in = "fifo_out.tmp"):
     f_in.close()
     return (elements, coords, grad)
 
-def write_output(energy, gradient = None, pipe_out = "fifo_in.tmp"):
+
+def write_output(energy, gradient=None, pipe_out="fifo_in.tmp"):
     f_out = open(pipe_out, "w")
     e = energy / 4.184
     print(e, file=f_out)
@@ -86,81 +123,90 @@ def write_output(energy, gradient = None, pipe_out = "fifo_in.tmp"):
     f_out.close()
 
 
-
 def calculation():
-    el_to_z={35:1, 6:3,  17:7, 9:9, 1:10, 53:12, 7:17, 8:21, 15:23, 16:26}
+    el_to_z = {35: 1, 6: 3, 17: 7, 9: 9, 1: 10, 53: 12, 7: 17, 8: 21, 15: 23, 16: 26}
     while True:
-        skip=[]
+        skip = []
         elements, coords, do_grad = wait_for_input()
-        disp=DispersionModel(numbers=np.array(elements),positions=np.array(coords)/B2A)
-        res = disp.get_dispersion(RationalDampingParam(s6=1.0, s8=0.3908, a1=0.566, a2=3.128),grad=False)
-        #atm removed, didnt work together with params
-        dftd3_corr=res.get("energy")*HA2KJMOL
-        #print("Received elements:")
-        #print(elements)
-        #print("Received coordinates:")
-        #print(coords)
-        for num,data in enumerate(elements):
-            if (data not in el_to_z): #unknown atom skipping
+        disp = DispersionModel(
+            numbers=np.array(elements), positions=np.array(coords) / B2A
+        )
+        res = disp.get_dispersion(
+            RationalDampingParam(s6=1.0, s8=0.3908, a1=0.566, a2=3.128), grad=False
+        )
+        # atm removed, didnt work together with params
+        dftd3_corr = res.get("energy") * HA2KJMOL
+        # print("Received elements:")
+        # print(elements)
+        # print("Received coordinates:")
+        # print(coords)
+        for num, data in enumerate(elements):
+            if data not in el_to_z:  # unknown atom skipping
                 skip.append(num)
                 elements.pop(num)
                 coords.pop(num)
             else:
                 elements[num] = el_to_z[data]
-        #print()
-    
+        # print()
+
         # Energy calculation
-        ene, forces = energy_forces(skip,elements, coords, model)
-        #print(f"Returning energy: {ene}")
-    
+        ene, forces = energy_forces(skip, elements, coords, model)
+        # print(f"Returning energy: {ene}")
+
         # ... and gradient
         if do_grad:
-            grad=[]
-            #print(f"Returning gradient:")
+            grad = []
+            # print(f"Returning gradient:")
             for f in forces:
                 # Multiply with -1 to get gradient from forces
                 x = f[0] / 4.184 * -1.0
                 y = f[1] / 4.184 * -1.0
                 z = f[2] / 4.184 * -1.0
-                grad.append([x,y,z])
-            #print(grad)
+                grad.append([x, y, z])
+            # print(grad)
         else:
             grad = None
-        print(ene,dftd3_corr)
-        write_output(ene+dftd3_corr, grad)
-        #print()
+        print(ene, dftd3_corr)
+        write_output(ene + dftd3_corr, grad)
+        # print()
 
-def energy_forces(skip,elem, geom, model):
-    if(elem == []): #empty geom - noble gases
-        return (torch.tensor(0, dtype=torch.float32),torch.tensor([], dtype=torch.float32))
+
+def energy_forces(skip, elem, geom, model):
+    if elem == []:  # empty geom - noble gases
+        return (
+            torch.tensor(0, dtype=torch.float32),
+            torch.tensor([], dtype=torch.float32),
+        )
     types = torch.tensor(elem, dtype=torch.long)
     types = types.to(device)
-    print(types)
+    # print(types)
     pos = torch.tensor(geom, dtype=torch.float32)
     pos = pos.to(device)
-    energy, forces = model.forward(types, pos)#,batch)
-    print(energy)
-    forces_corr=forces.tolist()
+    energy, forces = model.forward(types, pos)  # ,batch)
+    # print(energy)
+    forces_corr = forces.tolist()
     for i in skip:
-        forces_corr.insert(i,[0,0,0])
+        forces_corr.insert(i, [0, 0, 0])
     return (energy.item(), forces_corr)
 
-# Paths and files
-install_path = os.path.dirname(os.path.abspath(__file__))
-model_file = os.path.join(install_path, "best.ckpt")
-#model_file = os.path.join(install_path, "NCIA_4s10_ep098.ckpt")
-mopac_exe  = os.path.join(install_path, "mopac")
 
+# -------------------------------------------------------------------------------
+# Main program
+# -------------------------------------------------------------------------------
 
-print("================================================================================")
+print(
+    "================================================================================"
+)
 print("")
 print("MOPAC-ML wrapper")
 print("")
-print("================================================================================")
+print(
+    "================================================================================"
+)
 print("")
 
 print(f"Loading the model {model_file}")
-model=load_model(model_file, derivative=True)
+model = load_model(model_file, derivative=True)
 model.to(device)
 thread = threading.Thread(target=calculation, daemon=True)
 thread.start()
