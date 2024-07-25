@@ -178,7 +178,7 @@ def calculation():
             numbers=np.array(elements), positions=np.array(coords) / BOHR2ANGSTROM
         )
         res = disp.get_dispersion(
-            RationalDampingParam(s6=1.0, s8=0.3908, a1=0.566, a2=3.128), grad=False
+            RationalDampingParam(s6=1.0, s8=0.3908, a1=0.566, a2=3.128), grad=True
         )
         # atm removed, didnt work together with params
         dftd3_corr = res.get("energy") * HARTREE2KJMOL
@@ -186,13 +186,15 @@ def calculation():
         # print(elements)
         # print("Received coordinates:")
         # print(coords)
+        elem_out = []
         for num, data in enumerate(elements):
             if data not in el_to_z:  # unknown atom skipping
                 skip.append(num)
-                elements.pop(num)
                 coords.pop(num)
             else:
-                elements[num] = el_to_z[data]
+                elem_out.append(el_to_z[data])
+        
+        elements = elem_out
         # print()
 
         # Energy calculation
@@ -200,16 +202,11 @@ def calculation():
         # print(f"Returning energy: {ene}")
 
         # ... and gradient
+        dftd3_grad = res.get("gradient") * HARTREE2KJMOL /BOHR2ANGSTROM
         if do_grad:
-            grad = []
-            # print(f"Returning gradient:")
-            for f in forces:
-                # Multiply with -1 to get gradient from forces
-                x = f[0] / 4.184 * -1.0
-                y = f[1] / 4.184 * -1.0
-                z = f[2] / 4.184 * -1.0
-                grad.append([x, y, z])
-            # print(grad)
+            # Multiply with -1 to get gradient from forces
+            grad = (forces + dftd3_grad) / 4.184 * -1.0 
+            grad = grad.tolist()
         else:
             grad = None
         print(ene, dftd3_corr)
@@ -233,6 +230,7 @@ def energy_forces(skip, elem, geom, model):
     forces_corr = forces.tolist()
     for i in skip:
         forces_corr.insert(i, [0, 0, 0])
+    forces_corr = np.array(forces_corr)
     return (energy.item(), forces_corr)
 
 # -------------------------------------------------------------------------------
