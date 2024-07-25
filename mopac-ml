@@ -16,9 +16,12 @@ from dftd3.interface import RationalDampingParam, DispersionModel
 
 # TBD
 #!# Dispersion does not have gradient
-#!# Input should be checked, it must be a PM6 calculation
-#!# MOPAC keyword MLMODEL=/path/to/model.ckpt
-#   original input copied to temporaty file without this keyword
+
+# -------------------------------------------------------------------------------
+# Torch init
+# -------------------------------------------------------------------------------
+dev = "cpu"
+device = torch.device(dev)
 
 # -------------------------------------------------------------------------------
 # Paths and files
@@ -32,12 +35,13 @@ mopac_exe = os.path.join(install_path, "mopac")
 # Constants - unit conversion
 # -------------------------------------------------------------------------------
 
-HA2KJMOL = 627.5094740631 * 4.184
-B2A = 0.529177210903
+HARTREE2KJMOL = 627.5094740631 * 4.184
+BOHR2ANGSTROM = 0.529177210903
 
 # -------------------------------------------------------------------------------
-# Methods
+# Methods - initialization
 # -------------------------------------------------------------------------------
+
 def mopac_ml_terminate(msg):
     """
     Print error message and terminate with an error exit code
@@ -87,46 +91,35 @@ def check_input_file(fn):
                     )
             ln += 1
 
+def check_system_and_mopac(mopac_exe):
+    """
+    Check system, availability of MOPAC, etc
+    """
+    # Check if we're on Linux
+    if not sys.platform == "linux":
+        mopac_ml_terminate("MOPAC-ML can currently be used only on Linux")
+    if not os.path.exists(mopac_exe):
+        mopac_ml_terminate("MOPAC executable not found in the MOPAC-ML installation directory.\nIt should be named 'mopac'")
+    if not os.path.isfile(mopac_exe):
+        mopac_ml_terminate("MOPAC executable ('mopac') is not a file")
+    if not os.access(mopac_exe, os.X_OK):
+        mopac_ml_terminate("MOPAC executable ('mopac') is not executable")
+
+def create_interface_pipes():
+    """
+    Create the named pipes used by the interface
+    """
+    os.system("mkfifo fifo_in.tmp  fifo_out.tmp")
+
+def clean_interface_pipes():
+    """
+    Delete the named pipes used by the interface
+    """
+    os.system("rm -rf fifo_in.tmp  fifo_out.tmp")
 
 # -------------------------------------------------------------------------------
-# Initialization
+# Methods - interface
 # -------------------------------------------------------------------------------
-
-# Check if we're on Linux
-if not sys.platform == "linux":
-    print("", file=sys.stderr)
-    print("ERROR: MOPAC-ML can currently be used only on Linux", file=sys.stderr)
-    print("", file=sys.stderr)
-    sys.exit(1)
-
-
-# Create the pipes
-os.system("mkfifo fifo_in.tmp  fifo_out.tmp")
-
-# Torch init
-dev = "cpu"
-device = torch.device(dev)
-
-# -------------------------------------------------------------------------------
-# Interrupt handling
-# -------------------------------------------------------------------------------
-
-
-# Remove the pipes on exit using a
-# keyboard interrupt handler
-def sigint_handler(signal, frame):
-    print()
-    print("Interrupted, cleaning the files")
-    os.system("rm fifo_in.tmp  fifo_out.tmp")
-    sys.exit(0)
-
-
-signal.signal(signal.SIGINT, sigint_handler)
-
-# -------------------------------------------------------------------------------
-# Methods
-# -------------------------------------------------------------------------------
-
 
 def wait_for_input(pipe_in="fifo_out.tmp"):
     """
@@ -176,20 +169,19 @@ def write_output(energy, gradient=None, pipe_out="fifo_in.tmp"):
             print(g[0], " ", g[1], " ", g[2], file=f_out)
     f_out.close()
 
-
 def calculation():
     el_to_z = {35: 1, 6: 3, 17: 7, 9: 9, 1: 10, 53: 12, 7: 17, 8: 21, 15: 23, 16: 26}
     while True:
         skip = []
         elements, coords, do_grad = wait_for_input()
         disp = DispersionModel(
-            numbers=np.array(elements), positions=np.array(coords) / B2A
+            numbers=np.array(elements), positions=np.array(coords) / BOHR2ANGSTROM
         )
         res = disp.get_dispersion(
             RationalDampingParam(s6=1.0, s8=0.3908, a1=0.566, a2=3.128), grad=False
         )
         # atm removed, didnt work together with params
-        dftd3_corr = res.get("energy") * HA2KJMOL
+        dftd3_corr = res.get("energy") * HARTREE2KJMOL
         # print("Received elements:")
         # print(elements)
         # print("Received coordinates:")
@@ -243,32 +235,53 @@ def energy_forces(skip, elem, geom, model):
         forces_corr.insert(i, [0, 0, 0])
     return (energy.item(), forces_corr)
 
+# -------------------------------------------------------------------------------
+# Interrupt handling
+# -------------------------------------------------------------------------------
+
+# Remove the pipes on exit using a keyboard interrupt handler
+
+def sigint_handler(signal, frame):
+    print()
+    print("Interrupted, cleaning the files")
+    clean_interface_pipes()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, sigint_handler)
 
 # -------------------------------------------------------------------------------
 # Main program
 # -------------------------------------------------------------------------------
 
-print(
-    "================================================================================"
-)
+# Print header
+print("=" * 80)
 print("")
 print("MOPAC-ML wrapper")
 print("")
-print(
-    "================================================================================"
-)
+print("=" * 80)
 print("")
 
-# Get and check the input file
+# Get and check the input file and system
 input_fn = get_input_file()
 check_input_file(input_fn)
+check_system_and_mopac(mopac_exe)
 
-print(f"Loading the model {model_file}")
+# Set up the interface
+create_interface_pipes()
+
+# Load the model
+print(f"MOPAC-ML: Loading the model {model_file}")
 model = load_model(model_file, derivative=True)
 model.to(device)
+
+# Run the interface in a background thread
 thread = threading.Thread(target=calculation, daemon=True)
 thread.start()
-print("Running MOPAC")
+
+# Run MOPAC
+print("MOPAC-ML: Running MOPAC")
 os.system(f"{mopac_exe} {input_fn}")
-print("Cleaning up")
-os.system("rm -rf fifo_in.tmp  fifo_out.tmp")
+
+# Clean up the temporary files
+print("MOPAC_ML: Cleaning up")
+clean_interface_pipes()
