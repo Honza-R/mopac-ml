@@ -7,7 +7,13 @@ Dependencies
 
 First, a modified version of MOPAC with the interface communicating with the wrapper is needed. It is available as a fork of the official MOPAC repository [#!# TBD] 
 
+Next, the python environment for the ML correction has to be set up. It is easy with conda:
 
+````
+conda create --name pm6-ml
+conda activate pm6-ml
+conda install -c conda-forge torchmd-net simple-dftd3 dftd3-python
+````
 
 Models
 ------

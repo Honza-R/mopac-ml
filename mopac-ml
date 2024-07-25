@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
-import signal
 import sys
 import os
+import re
+import signal
 import threading
 import numpy as np
 
@@ -14,10 +15,10 @@ from torchmdnet.models.model import load_model
 from dftd3.interface import RationalDampingParam, DispersionModel
 
 # TBD
+#!# Dispersion does not have gradient
 #!# Input should be checked, it must be a PM6 calculation
 #!# MOPAC keyword MLMODEL=/path/to/model.ckpt
 #   original input copied to temporaty file without this keyword
-#!# Dispersion is now missing
 
 # -------------------------------------------------------------------------------
 # Paths and files
@@ -33,6 +34,59 @@ mopac_exe = os.path.join(install_path, "mopac")
 
 HA2KJMOL = 627.5094740631 * 4.184
 B2A = 0.529177210903
+
+# -------------------------------------------------------------------------------
+# Methods
+# -------------------------------------------------------------------------------
+def mopac_ml_terminate(msg):
+    """
+    Print error message and terminate with an error exit code
+    """
+    print("", file=sys.stderr)
+    print("!" * 80)
+    print("ERROR: " + msg, file=sys.stderr)
+    print("!" * 80)
+    print("", file=sys.stderr)
+    sys.exit(1)
+
+
+def get_input_file():
+    """
+    Checks if input file is provided and exists. Returns name of the file
+    """
+    if len(sys.argv) != 2:
+        mopac_ml_terminate(
+            "MOPAC-ML expects one commandline argument, the name of the MOPAC input file"
+        )
+    input_fn = sys.argv[1]
+    if not os.path.exists(input_fn):
+        mopac_ml_terminate("Input file does not exist")
+    if not os.path.isfile(input_fn):
+        mopac_ml_terminate("Input file is not a file")
+    return input_fn
+
+
+def check_input_file(fn):
+    """
+    Checks if the input file contains PM6 and MLCORR keywords
+    """
+    with open(fn) as f:
+        ln = 1
+        for line in f:
+            line = line.rstrip()
+            # First line check
+            if ln == 1:
+                # Method must be PM6
+                if not re.search("PM6 ", line):
+                    mopac_ml_terminate(
+                        "The ML correction is available only for PM6,\nbut a different method is specified in the input file"
+                    )
+                if not re.search("MLCORR ", line):
+                    mopac_ml_terminate(
+                        "The ML correction is not activated in the input file,\nplease add keyword MLCORR"
+                    )
+            ln += 1
+
 
 # -------------------------------------------------------------------------------
 # Initialization
@@ -205,12 +259,16 @@ print(
 )
 print("")
 
+# Get and check the input file
+input_fn = get_input_file()
+check_input_file(input_fn)
+
 print(f"Loading the model {model_file}")
 model = load_model(model_file, derivative=True)
 model.to(device)
 thread = threading.Thread(target=calculation, daemon=True)
 thread.start()
 print("Running MOPAC")
-os.system(f"{mopac_exe} {sys.argv[1]}")
+os.system(f"{mopac_exe} {input_fn}")
 print("Cleaning up")
 os.system("rm -rf fifo_in.tmp  fifo_out.tmp")
