@@ -34,7 +34,9 @@ conda install -c conda-forge torchmd-net simple-dftd3 dftd3-python
 Models
 ------
 
-The `models` directory contains the ML model used by the code. The default model used in the published version of PM6-ML is the `PM6-ML_correction_seed8_best.ckpt` file.
+The `models` directory contains the ML models. The default model used in the version of PM6-ML published in the preprint referenced below is the `PM6-ML_correction_seed8_best.ckpt` file. Four more models which ranked next in our selection are also provided but not used my MOPAC-ML.
+
+This repository contain also the model files for the standalone MD potential discussed in the paper and trained in the same way as PM6-ML. These are not used by MOPAC-ML. The files are named `TorchMD-NET-ET_standalone_*`.
 
 License
 -------
