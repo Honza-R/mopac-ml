@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import re
+import signal
+import threading
+import numpy as np
+
+# Torch and TorchMD-NET
+import torch
+from torchmdnet.models.model import load_model
+
+# Dispersion correction
+from dftd3.interface import RationalDampingParam, DispersionModel
+
+# TBD
+#!# Dispersion does not have gradient
+
+# -------------------------------------------------------------------------------
+# Torch init
+# -------------------------------------------------------------------------------
+device = torch.get_default_device()
+
+# Force torch to use CPU:
+#dev = "cpu"
+#device = torch.device(dev)
+
+# -------------------------------------------------------------------------------
+# Paths and files
+# -------------------------------------------------------------------------------
+
+install_path = os.path.dirname(os.path.abspath(__file__))
+model_file = os.path.join(install_path, "models", "PM6-ML_correction_final_seed8.ckpt")
+mopac_exe = os.path.join(install_path, "mopac")
+
+# -------------------------------------------------------------------------------
+# Constants - unit conversion
+# -------------------------------------------------------------------------------
+
+HARTREE2KJMOL = 627.5094740631 * 4.184
+BOHR2ANGSTROM = 0.529177210903
+
+# -------------------------------------------------------------------------------
+# Methods - initialization
+# -------------------------------------------------------------------------------
+
+def mopac_ml_terminate(msg):
+    """
+    Print error message and terminate with an error exit code
+    """
+    print("", file=sys.stderr)
+    print("!" * 80)
+    print("ERROR: " + msg, file=sys.stderr)
+    print("!" * 80)
+    print("", file=sys.stderr)
+    sys.exit(1)
+
+
+def get_input_file():
+    """
+    Checks if input file is provided and exists. Returns name of the file
+    """
+    if len(sys.argv) != 2:
+        mopac_ml_terminate(
+            "MOPAC-ML expects one commandline argument, the name of the MOPAC input file"
+        )
+    input_fn = sys.argv[1]
+    if not os.path.exists(input_fn):
+        mopac_ml_terminate("Input file does not exist")
+    if not os.path.isfile(input_fn):
+        mopac_ml_terminate("Input file is not a file")
+    return input_fn
+
+
+def check_input_file(fn):
+    """
+    Checks if the input file contains PM6 and MLCORR keywords
+    """
+    with open(fn) as f:
+        ln = 1
+        for line in f:
+            line = line.rstrip()
+            # First line check
+            if ln == 1:
+                # Method must be PM6
+                if not re.search("PM6 ", line):
+                    mopac_ml_terminate(
+                        "The ML correction is available only for PM6,\nbut a different method is specified in the input file"
+                    )
+                if not re.search("MLCORR", line):
+                    mopac_ml_terminate(
+                        "The ML correction is not activated in the input file,\nplease add keyword MLCORR"
+                    )
+            ln += 1
+
+def check_system_and_mopac(mopac_exe):
+    """
+    Check system, availability of MOPAC, etc
+    """
+    # Check if we're on Linux
+    if not sys.platform == "linux":
+        mopac_ml_terminate("MOPAC-ML can currently be used only on Linux")
+    if not os.path.exists(mopac_exe):
+        mopac_ml_terminate("MOPAC executable not found in the MOPAC-ML installation directory.\nIt should be named 'mopac'")
+    if not os.path.isfile(mopac_exe):
+        mopac_ml_terminate("MOPAC executable ('mopac') is not a file")
+    if not os.access(mopac_exe, os.X_OK):
+        mopac_ml_terminate("MOPAC executable ('mopac') is not executable")
+
+def create_interface_pipes():
+    """
+    Create the named pipes used by the interface
+    """
+    os.system("mkfifo fifo_in.tmp  fifo_out.tmp")
+
+def clean_interface_pipes():
+    """
+    Delete the named pipes used by the interface
+    """
+    os.system("rm -rf fifo_in.tmp  fifo_out.tmp")
+
+# -------------------------------------------------------------------------------
+# Methods - interface
+# -------------------------------------------------------------------------------
+
+def wait_for_input(pipe_in="fifo_out.tmp"):
+    """
+    Wait for input from pipe, return coordinates (list of lists)
+    """
+    f_in = open(pipe_in, "r")
+    size = None
+    coords = None
+    grad = False
+    while True:
+        line = f_in.readline().strip()
+        if line:
+            if not size:
+                size = int(line)
+                coords = []
+                elements = []
+            elif line == "E":
+                break
+            elif line == "G":
+                grad = True
+                break
+            else:
+                coords.append(line)
+
+    # Check size of coords
+    if size != len(coords):
+        raise Exception("No. of coordinates does not match the header")
+
+    # Split lines and convert to numbers
+    for i, line in enumerate(coords):
+        words = line.split()
+        first = words.pop(0)
+        elements.append(int(first))
+        coords[i] = list(map(lambda x: float(x), words))
+
+    f_in.close()
+    return (elements, coords, grad)
+
+
+def write_output(energy, gradient=None, pipe_out="fifo_in.tmp"):
+    f_out = open(pipe_out, "w")
+    e = energy / 4.184
+    print(e, file=f_out)
+    if gradient:
+        for g in gradient:
+            print(g[0], " ", g[1], " ", g[2], file=f_out)
+    f_out.close()
+
+def calculation():
+    el_to_z = {35: 1, 6: 3, 17: 7, 9: 9, 1: 10, 53: 12, 7: 17, 8: 21, 15: 23, 16: 26}
+    while True:
+        skip = []
+        elements, coords, do_grad = wait_for_input()
+        disp = DispersionModel(
+            numbers=np.array(elements), positions=np.array(coords) / BOHR2ANGSTROM
+        )
+        res = disp.get_dispersion(
+            RationalDampingParam(s6=1.0, s8=0.3908, a1=0.566, a2=3.128), grad=True
+        )
+        dftd3_corr = res.get("energy") * HARTREE2KJMOL
+        elem_out = []
+        for num, data in enumerate(elements):
+            if data not in el_to_z:  # unknown atom skipping
+                skip.append(num)
+                coords.pop(num)
+            else:
+                elem_out.append(el_to_z[data])
+        
+        elements = elem_out
+
+        # Energy calculation
+        ene, forces = energy_forces(skip, elements, coords, model)
+
+        # ... and gradient
+        dftd3_grad = res.get("gradient") * HARTREE2KJMOL /BOHR2ANGSTROM
+        if do_grad:
+            # Multiply with -1 to get gradient from forces
+            grad = (forces * -1.0 + dftd3_grad) / 4.184
+            grad = grad.tolist()
+        else:
+            grad = None
+        write_output(ene + dftd3_corr, grad)
+
+
+def energy_forces(skip, elem, geom, model):
+    if elem == []:  # empty geom - noble gases
+        return (
+            torch.tensor(0, dtype=torch.float32),
+            torch.tensor([], dtype=torch.float32),
+        )
+    types = torch.tensor(elem, dtype=torch.long)
+    types = types.to(device)
+    pos = torch.tensor(geom, dtype=torch.float32)
+    pos = pos.to(device)
+    energy, forces = model.forward(types, pos)  # ,batch)
+    forces_corr = forces.tolist()
+    for i in skip:
+        forces_corr.insert(i, [0, 0, 0])
+    forces_corr = np.array(forces_corr)
+    return (energy.item(), forces_corr)
+
+# -------------------------------------------------------------------------------
+# Interrupt handling
+# -------------------------------------------------------------------------------
+
+# Remove the pipes on exit using a keyboard interrupt handler
+
+def sigint_handler(signal, frame):
+    print()
+    print("Interrupted, cleaning the files")
+    clean_interface_pipes()
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, sigint_handler)
+
+# -------------------------------------------------------------------------------
+# Main program
+# -------------------------------------------------------------------------------
+
+# Print header
+print("=" * 80)
+print("")
+print("MOPAC-ML wrapper")
+print("")
+print("=" * 80)
+print("")
+
+# Get and check the input file and system
+input_fn = get_input_file()
+check_input_file(input_fn)
+check_system_and_mopac(mopac_exe)
+
+# Set up the interface
+create_interface_pipes()
+
+# Load the model
+print(f"MOPAC-ML: Loading the model {model_file}")
+model = load_model(model_file, derivative=True)
+model.to(device)
+
+# Run the interface in a background thread
+thread = threading.Thread(target=calculation, daemon=True)
+thread.start()
+
+# Run MOPAC
+print("MOPAC-ML: Running MOPAC")
+os.system(f"{mopac_exe} {input_fn}")
+
+# Clean up the temporary files
+print("MOPAC_ML: Cleaning up")
+clean_interface_pipes()
