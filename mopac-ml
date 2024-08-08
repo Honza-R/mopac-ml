@@ -31,7 +31,7 @@ device = torch.get_default_device()
 # -------------------------------------------------------------------------------
 
 install_path = os.path.dirname(os.path.abspath(__file__))
-model_file = os.path.join(install_path, "models", "PM6-ML_correction_final_seed8.ckpt")
+model_file = os.path.join(install_path, "models", "PM6-ML_correction_seed8_best.ckpt")
 mopac_exe = os.path.join(install_path, "mopac")
 
 # -------------------------------------------------------------------------------

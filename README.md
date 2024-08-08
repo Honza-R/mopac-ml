@@ -34,7 +34,7 @@ conda install -c conda-forge torchmd-net simple-dftd3 dftd3-python
 Models
 ------
 
-The `models` directory contains the ML model used by the code. The default model used in the published version of PM6-ML is the `PM6-ML_correction_final_seed8.ckpt` file.
+The `models` directory contains the ML model used by the code. The default model used in the published version of PM6-ML is the `PM6-ML_correction_seed8_best.ckpt` file.
 
 License
 -------
