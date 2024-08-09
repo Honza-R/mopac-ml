@@ -48,4 +48,7 @@ The models are licensed under the Academic Software Licence, [enclosed in the mo
 How to Cite
 -----------
 
-The PM6-ML method is described in [#!# TBD].
+The PM6-ML method is described in the preprint:
+
+Nováček M, Řezáč J. *PM6-ML: The Synergy of Semiempirical Quantum Chemistry and Machine Learning Transformed into a Practical Computational Method.* ChemRxiv. 2024; [doi:10.26434/chemrxiv-2024-3nwwv-v2](https://doi.org/10.26434/chemrxiv-2024-3nwwv-v2)
+
